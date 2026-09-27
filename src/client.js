@@ -1,6 +1,10 @@
 // htmlpen browser overlay: comment on and edit the page. The htmlpen server injects it.
 (() => {
   const me = document.currentScript;
+  // A page framing another served page: one toolbar (and one live connection) is enough.
+  try {
+    if (window !== top && top.location.origin === location.origin) return;
+  } catch {} // cross-origin parent, e.g. an app embedding the preview: keep the toolbar
   const FILE = me.dataset.file; // URL path of the HTML file being reviewed
   const DISPLAY = me.dataset.display; // how agents should refer to the file
   const SIDECAR = `${FILE}.comments.json`;
@@ -25,17 +29,19 @@
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
 
   async function api(route, body) {
-    const res = await fetch(
-      `/__htmlpen/${route}?file=${encodeURIComponent(FILE)}`,
-      body === undefined
-        ? {}
-        : {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-htmlpen': KEY },
-            body: JSON.stringify(body),
-          },
-    );
-    const data = await res.json();
+    const offline = (msg) => Object.assign(new Error(msg), { offline: true });
+    const init = body === undefined
+      ? {}
+      : {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-htmlpen': KEY },
+          body: JSON.stringify(body),
+        };
+    const res = await fetch(`/__htmlpen/${route}?file=${encodeURIComponent(FILE)}`, init).catch(() => {
+      throw offline("htmlpen isn't running");
+    });
+    const data = await res.json().catch(() => null); // a proxy's error page isn't JSON
+    if (!data) throw offline(`htmlpen isn't reachable (${res.status})`);
     if (!res.ok) throw new Error(data.error);
     return data;
   }
@@ -136,6 +142,8 @@
   let editing = null; // { el, before } while an element is contenteditable
   let flashEl = null;
   let pendingReload = false;
+  let saving = 0; // comment changes in flight
+  const unsaved = []; // comment changes made while htmlpen was unreachable
   let pinEls = [];
 
   function toast(msg, sticky = false) {
@@ -169,7 +177,10 @@
 
   // ---------- element helpers ----------
   const ours = (e) => e.composedPath().includes(host);
-  const isTyping = (el) => el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName);
+  const isTyping = (e) => {
+    const el = e.composedPath()[0]; // the real target, even inside a web component's shadow root
+    return el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName ?? '');
+  };
 
   // Edit the nearest block-level element with text, so clicking a <b> edits its whole paragraph.
   // SVG can't be contenteditable, so text inside it is comment-only.
@@ -179,15 +190,6 @@
       if (getComputedStyle(el).display !== 'inline' && el.textContent.trim()) return el;
     }
     return null;
-  }
-
-  // Child-element indices from <body>; the server uses it to tell identical elements apart.
-  function pathOf(el) {
-    const path = [];
-    for (; el.parentElement && el !== document.body; el = el.parentElement) {
-      path.unshift([...el.parentElement.children].indexOf(el));
-    }
-    return path;
   }
 
   function selectorOf(el) {
@@ -287,12 +289,27 @@
     layout();
   }
 
-  async function save() {
+  // Reload to show the file's new content, unless that would throw away the user's work.
+  const busy = () => editing || !pop.hidden || saving || unsaved.length;
+  function reloadSoon() {
+    if (busy()) pendingReload = true;
+    else location.reload();
+  }
+
+  // `comments` is already updated locally; send the one change so tabs and agents can't clobber
+  // each other, then take the server's merged list.
+  async function change(op) {
     render();
+    saving++;
     try {
-      await api('comments', comments);
+      comments = await api('comments', op);
+      render();
     } catch (err) {
-      toast(`Couldn't save comments: ${err.message}`);
+      if (err.offline) unsaved.push(op);
+      toast(err.offline ? `${err.message}. Your comments will be saved when it's back.` : `Couldn't save: ${err.message}`);
+    } finally {
+      saving--;
+      if (pendingReload) reloadSoon();
     }
   }
 
@@ -305,16 +322,17 @@
     }
   }
 
-  function addComment(el, comment, quote) {
-    comments.push({
+  function addComment(el, text, quote) {
+    const comment = {
       id: crypto.randomUUID().slice(0, 8),
-      comment,
+      comment: text,
       ...(quote && { quote }),
       ...(el && { text: short(squash(el.textContent), 120), element: openTag(el), selector: selectorOf(el) }),
       resolved: false,
       created: new Date().toISOString(),
-    });
-    return save();
+    };
+    comments.push(comment);
+    return change({ op: 'add', comment });
   }
 
   function agentPrompt() {
@@ -360,8 +378,9 @@
     if (pop.hidden) return;
     pop.hidden = true;
     draft = null;
+    textarea.blur(); // hand the keyboard back to the page, so C / E / Esc work again
     layout();
-    if (pendingReload && !editing) location.reload();
+    if (pendingReload) reloadSoon();
   }
 
   pop.onsubmit = async (e) => {
@@ -371,8 +390,9 @@
     const { el, quote } = draft;
     textarea.value = '';
     getSelection().removeAllRanges();
+    const saved = addComment(el, text, quote); // counts as in flight before the popover closes
     closePopover();
-    await addComment(el, text, quote);
+    await saved;
   };
   textarea.onkeydown = (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) pop.requestSubmit();
@@ -384,7 +404,7 @@
   $('#page-comment').onclick = () => openPopover(null);
   $('#clear').onclick = () => {
     comments = comments.filter((c) => !c.resolved);
-    save();
+    change({ op: 'clearResolved' });
   };
   async function send(how) {
     const prompt = agentPrompt();
@@ -413,9 +433,8 @@
     const c = li && comments.find((x) => x.id === li.dataset.id);
     if (!c) return;
     const act = e.target.closest('[data-act]')?.dataset.act;
-    if (act === 'resolve') c.resolved = !c.resolved;
-    if (act === 'delete') comments = comments.filter((x) => x !== c);
-    if (act) return save();
+    if (act === 'resolve') return change({ op: 'resolve', id: c.id, resolved: (c.resolved = !c.resolved) });
+    if (act === 'delete') return (comments = comments.filter((x) => x !== c)), change({ op: 'delete', id: c.id });
     const el = find(c);
     if (!el) return toast('That element is no longer on the page.');
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -450,7 +469,7 @@
     el.removeAttribute('contenteditable');
     if (el.innerHTML !== before) el.innerHTML = before;
     layout();
-    if (pendingReload) location.reload();
+    if (pendingReload) reloadSoon();
   }
 
   async function commitEdit() {
@@ -461,8 +480,13 @@
     layout();
     const after = el.innerHTML;
     if (after !== before) {
+      saving++;
       try {
-        await api('edit', { tag: el.localName, path: pathOf(el), before, after });
+        // Which of the identical elements this is; the server checks the file has as many.
+        const same = [...document.body.querySelectorAll(CSS.escape(el.localName))].filter(
+          (x) => x === el || x.innerHTML === before,
+        );
+        await api('edit', { tag: el.localName, index: same.indexOf(el), count: same.length, before, after });
         sessionStorage.setItem(EDITS_KEY, '1');
         toast(`Saved to ${DISPLAY}`);
       } catch (err) {
@@ -471,9 +495,11 @@
         el.innerHTML = before;
         await addComment(el, `Change this text to: "${wanted}"`);
         toast(`Couldn't write that edit directly (${err.message}) Saved it as a comment instead.`);
+      } finally {
+        saving--;
       }
     }
-    if (pendingReload && !editing) location.reload();
+    if (pendingReload) reloadSoon();
   }
 
   // ---------- page event interception ----------
@@ -521,14 +547,14 @@
   addEventListener(
     'keydown',
     (e) => {
-      if (ours(e)) return;
+      if (ours(e) || e.isComposing || e.keyCode === 229) return; // 229: IME is composing
       if (editing?.el.contains(e.target)) {
         e.stopPropagation();
         if (e.key === 'Enter' && !e.shiftKey) e.preventDefault(), commitEdit();
         if (e.key === 'Escape') e.preventDefault(), cancelEdit();
         return;
       }
-      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
       const next = { c: 'comment', e: 'edit' }[e.key?.toLowerCase()];
       if (next) {
         e.preventDefault();
@@ -546,18 +572,20 @@
     const { path } = JSON.parse(data);
     if (path === SIDECAR) return load();
     if (/\.html?$/i.test(path) && path !== FILE) return;
-    if (editing || !pop.hidden) {
-      pendingReload = true;
-      return toast('The file changed on disk. Reloading when you finish.');
-    }
-    location.reload();
+    if (busy()) toast('The file changed on disk. Reloading when you finish.');
+    reloadSoon();
   }
-  // If the server restarts (an agent re-runs htmlpen), reload once it's back.
+  // If the server restarts (an agent re-runs htmlpen), save what couldn't be saved, then reload.
   let lost = false;
+  async function reconnected() {
+    lost = false;
+    for (const op of unsaved.splice(0)) await change(op);
+    reloadSoon();
+  }
   (function connect() {
     const events = new EventSource('/__htmlpen/events');
     events.onmessage = onChange;
-    events.onopen = () => lost && location.reload();
+    events.onopen = () => lost && reconnected();
     events.onerror = () => {
       lost = true;
       // A proxy error page closes the stream for good; browsers only retry network errors.

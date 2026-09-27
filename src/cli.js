@@ -2,7 +2,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -52,6 +52,7 @@ if (!targetStat) {
   process.exit(1);
 }
 const root = targetStat.isDirectory() ? target : path.dirname(target);
+const realRoot = await realpath(root);
 
 // In a Conductor cloud workspace the user's browser can't reach localhost, so htmlpen shares
 // itself at the workspace preview URL. Anyone with read access can open that URL, so writes
@@ -86,21 +87,52 @@ const TYPES = {
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.pdf': 'application/pdf',
+  '.wasm': 'application/wasm',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
 };
 const isHtml = (p) => /\.html?$/i.test(p);
-const escAttr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const escAttr = (s) =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/[^\x20-\x7e]/gu, (c) => `&#${c.codePointAt(0)};`); // ASCII-only, so any page encoding works
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
 // URL path <-> absolute file path, refusing anything outside the served folder.
 const toUrl = (abs) => `/${path.relative(root, abs).split(path.sep).map(encodeURIComponent).join('/')}`;
+const outside = (rel) => rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
 function toAbs(urlPath) {
   const abs = path.join(root, decodeURIComponent(urlPath));
-  if (abs !== root && !abs.startsWith(root + path.sep)) throw fail(403, 'Outside the served folder');
+  const rel = path.relative(root, abs);
+  if (outside(rel)) throw fail(403, 'Outside the served folder');
+  // Never serve dotfiles (.env, .git): on a shared preview link, every viewer could read them.
+  if (rel.split(path.sep).some((part) => part.startsWith('.'))) throw fail(404, 'Not found');
   return abs;
+}
+// Symlinks can point anywhere, so also check where an existing file really lives.
+async function assertInside(abs) {
+  const real = await realpath(abs).catch(() => null);
+  if (real && outside(path.relative(realRoot, real))) throw fail(403, 'Outside the served folder');
+}
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+// The file's text, or null if it isn't valid UTF-8 (such pages are served as-is, never edited).
+function asUtf8(bytes) {
+  try {
+    return utf8.decode(bytes);
+  } catch {
+    return null;
+  }
+}
+// One read-modify-write at a time per file, so simultaneous saves can't interleave.
+const locks = new Map();
+function exclusive(abs, fn) {
+  const run = (locks.get(abs) ?? Promise.resolve()).then(fn);
+  locks.set(abs, run.catch(() => {}));
+  return run;
 }
 function display(abs) {
   const rel = path.relative(process.cwd(), abs);
@@ -156,7 +188,17 @@ function postToConductor(text) {
 
 async function writeOwn(abs, content) {
   selfWrites.set(abs, content);
-  await (content === null ? rm(abs, { force: true }) : writeFile(abs, content));
+  await writeFile(abs, content);
+}
+
+async function readComments(sidecar) {
+  const saved = await readFile(sidecar, 'utf8').catch(() => '[]');
+  let list;
+  try {
+    list = JSON.parse(saved);
+  } catch {}
+  if (!Array.isArray(list)) throw fail(409, `${path.basename(sidecar)} isn't a valid list. Fix or delete it.`);
+  return list;
 }
 
 // ---------- HTTP ----------
@@ -167,12 +209,13 @@ function send(res, status, body, type = 'text/plain; charset=utf-8') {
 const sendJson = (res, status, data) => send(res, status, JSON.stringify(data), TYPES['.json']);
 
 async function readJson(req) {
-  let body = '';
+  const chunks = [];
+  let size = 0;
   for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 20e6) throw fail(413, 'Request too large');
+    chunks.push(chunk);
+    if ((size += chunk.length) > 20e6) throw fail(413, 'Request too large');
   }
-  return JSON.parse(body);
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')); // decode once: chunks split characters
 }
 
 function inject(html, abs) {
@@ -216,10 +259,15 @@ async function serveFile(res, urlPath) {
     info = true;
   }
   if (!info) return send(res, 404, 'Not found');
+  await assertInside(abs);
   track(abs);
   const body = await readFile(abs);
   const type = TYPES[path.extname(abs).toLowerCase()] ?? 'application/octet-stream';
-  send(res, 200, isHtml(abs) ? inject(body.toString('utf8'), abs) : body, type);
+  if (!isHtml(abs)) return send(res, 200, body, type);
+  const text = asUtf8(body);
+  if (text !== null) return send(res, 200, inject(text, abs), type);
+  // Not UTF-8: latin1 maps bytes 1:1, so the page keeps its bytes and its own <meta charset>.
+  send(res, 200, Buffer.from(inject(body.toString('latin1'), abs), 'latin1'), 'text/html');
 }
 
 async function api(req, res, url) {
@@ -235,6 +283,7 @@ async function api(req, res, url) {
 
   const file = toAbs(url.searchParams.get('file') ?? '');
   if (!isHtml(file) || !(await stat(file).catch(() => null))) throw fail(404, 'Not an HTML file');
+  await assertInside(file);
   // The custom header forces a CORS preflight we never answer, so other sites can't write.
   if (req.method === 'POST') {
     const site = req.headers['sec-fetch-site'];
@@ -258,14 +307,21 @@ async function api(req, res, url) {
   if (route === 'comments') {
     const sidecar = `${file}.comments.json`;
     track(sidecar);
-    if (req.method !== 'POST') {
-      const saved = await readFile(sidecar, 'utf8').catch(() => '[]');
-      return sendJson(res, 200, JSON.parse(saved));
-    }
-    const comments = await readJson(req);
-    if (!Array.isArray(comments)) throw fail(400, 'Expected an array of comments');
-    await writeOwn(sidecar, comments.length ? `${JSON.stringify(comments, null, 2)}\n` : null);
-    return sendJson(res, 200, { ok: true });
+    await assertInside(sidecar);
+    if (req.method !== 'POST') return sendJson(res, 200, await readComments(sidecar));
+    // Tabs, reviewers and agents all change this file, so apply one change rather than a whole list.
+    const op = await readJson(req);
+    const comments = await exclusive(sidecar, async () => {
+      let list = await readComments(sidecar);
+      if (op.op === 'add' && typeof op.comment?.id === 'string') list.push(op.comment);
+      else if (op.op === 'resolve') list = list.map((c) => (c.id === op.id ? { ...c, resolved: !!op.resolved } : c));
+      else if (op.op === 'delete') list = list.filter((c) => c.id !== op.id);
+      else if (op.op === 'clearResolved') list = list.filter((c) => !c.resolved);
+      else throw fail(400, 'Unknown comment change');
+      await (list.length ? writeFile(sidecar, `${JSON.stringify(list, null, 2)}\n`) : rm(sidecar, { force: true }));
+      return list;
+    });
+    return sendJson(res, 200, comments);
   }
 
   if (route === 'edit' && req.method === 'POST') {
@@ -274,16 +330,20 @@ async function api(req, res, url) {
       typeof edit.tag === 'string' &&
       typeof edit.before === 'string' &&
       typeof edit.after === 'string' &&
-      Array.isArray(edit.path) &&
-      edit.path.every(Number.isInteger);
+      Number.isInteger(edit.index) &&
+      Number.isInteger(edit.count);
     if (!valid) throw fail(400, 'Malformed edit');
-    let next;
-    try {
-      next = applyEdit(await readFile(file, 'utf8'), edit);
-    } catch (err) {
-      throw fail(409, err.message);
-    }
-    await writeOwn(file, next);
+    await exclusive(file, async () => {
+      const text = asUtf8(await readFile(file));
+      if (text === null) throw fail(409, 'Only UTF-8 files can be edited in place.');
+      let next;
+      try {
+        next = applyEdit(text, edit);
+      } catch (err) {
+        throw fail(409, err.message);
+      }
+      await writeOwn(file, next);
+    });
     return sendJson(res, 200, { ok: true });
   }
   throw fail(404, 'Unknown route');
