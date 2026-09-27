@@ -5,7 +5,19 @@
   const DISPLAY = me.dataset.display; // how agents should refer to the file
   const SIDECAR = `${FILE}.comments.json`;
   const MODE_KEY = `htmlpen:mode:${FILE}`;
+  const EDITS_KEY = `htmlpen:edits:${FILE}`;
+  const SEND = me.dataset.send; // 'copy', or 'agent' when htmlpen can deliver feedback itself
+  const AGENT = me.dataset.agent; // "Claude" or "your agent"
   me.remove(); // the live DOM must mirror the file so edits can be matched back to source
+
+  // Shared links carry an edit key (?htmlpen=...); keep it for this origin, drop it from the URL.
+  const params = new URLSearchParams(location.search);
+  if (params.has('htmlpen')) {
+    localStorage.setItem('htmlpen:key', params.get('htmlpen'));
+    params.delete('htmlpen');
+    history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}${location.hash}`);
+  }
+  const KEY = localStorage.getItem('htmlpen:key') ?? '1';
 
   const squash = (s) => s.replace(/\s+/g, ' ').trim();
   const short = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -19,7 +31,7 @@
         ? {}
         : {
             method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-htmlpen': '1' },
+            headers: { 'content-type': 'application/json', 'x-htmlpen': KEY },
             body: JSON.stringify(body),
           },
     );
@@ -92,14 +104,14 @@
   <aside id="panel" hidden aria-label="Comments">
     <header>Comments <button id="panel-close" aria-label="Close">×</button></header>
     <ol id="list"></ol>
-    <footer><button id="page-comment">+ Page comment</button><button id="clear">Clear resolved</button></footer>
+    <footer><button id="page-comment">+ Page comment</button><button id="clear">Clear resolved</button><button id="copy">Copy</button></footer>
   </aside>
   <div id="bar" role="toolbar" aria-label="htmlpen">
     <button data-mode="comment" title="Comment on an element (C)">Comment<kbd>C</kbd></button>
     <button data-mode="edit" title="Edit text in place (E)">Edit<kbd>E</kbd></button>
     <div class="sep"></div>
     <button id="count" title="Show comments"></button>
-    <button id="copy" title="Copy open comments as a prompt for your coding agent">Copy for agent</button>
+    <button id="send"></button>
   </div>
   <div id="toast" role="status" hidden></div>`;
   document.documentElement.append(host);
@@ -126,11 +138,11 @@
   let pendingReload = false;
   let pinEls = [];
 
-  function toast(msg) {
+  function toast(msg, sticky = false) {
     toastEl.textContent = msg;
     toastEl.hidden = false;
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => (toastEl.hidden = true), 3500);
+    if (!sticky) toast.timer = setTimeout(() => (toastEl.hidden = true), 3500);
   }
 
   function setMode(next) {
@@ -305,7 +317,10 @@
 
   function agentPrompt() {
     const open = comments.map((c, i) => ({ c, n: i + 1 })).filter(({ c }) => !c.resolved);
-    if (!open.length) return null;
+    const edited = sessionStorage.getItem(EDITS_KEY)
+      ? `I also edited text directly in the page. Those changes are already saved in \`${DISPLAY}\`, so re-read it before editing.`
+      : '';
+    if (!open.length) return edited && `Review of \`${DISPLAY}\`: ${edited}`;
     const items = open.map(({ c, n }) => {
       const where = c.selector
         ? `On \`${c.element}\`${c.text ? ` "${short(c.text, 80)}"` : ''} (selector: \`${c.selector}\`)`
@@ -316,6 +331,7 @@
     return [
       `Please update \`${DISPLAY}\` to address my review comments below.`,
       `They are also saved in \`${DISPLAY}.comments.json\`; set "resolved": true on each one you address.`,
+      ...(edited ? [edited] : []),
       '',
       ...items,
     ].join('\n');
@@ -368,12 +384,25 @@
     comments = comments.filter((c) => !c.resolved);
     save();
   };
-  $('#copy').onclick = async () => {
+  async function send(how) {
     const prompt = agentPrompt();
-    if (!prompt) return toast('No open comments to copy.');
-    await navigator.clipboard.writeText(prompt);
-    toast('Copied. Paste it into your coding agent.');
-  };
+    if (!prompt) return toast('No open comments or edits to send.');
+    if (how === 'copy') {
+      await navigator.clipboard.writeText(prompt);
+      return toast('Copied. Paste it into your coding agent.');
+    }
+    try {
+      const { exiting } = await api('send', { prompt });
+      sessionStorage.removeItem(EDITS_KEY);
+      toast(exiting ? `Sent. ${AGENT} is on it; this page reloads when it's done.` : `Sent to ${AGENT}.`, exiting);
+    } catch (err) {
+      toast(`Couldn't send: ${err.message}`);
+    }
+  }
+  $('#send').textContent = SEND === 'agent' ? `Send to ${AGENT}` : 'Copy for agent';
+  $('#send').title = SEND === 'agent' ? `Send open comments to ${AGENT}` : 'Copy open comments as a prompt';
+  $('#send').onclick = () => send(SEND);
+  $('#copy').onclick = () => send('copy');
   for (const b of ui.querySelectorAll('[data-mode]')) {
     b.onclick = () => toggleMode(b.dataset.mode);
   }
@@ -432,6 +461,7 @@
     if (after !== before) {
       try {
         await api('edit', { tag: el.localName, path: pathOf(el), before, after });
+        sessionStorage.setItem(EDITS_KEY, '1');
         toast(`Saved to ${DISPLAY}`);
       } catch (err) {
         // Never lose the user's words: turn the edit into a comment for the agent instead.
@@ -510,7 +540,7 @@
   );
 
   // ---------- live reload when the agent changes the file ----------
-  new EventSource('/__htmlpen/events').onmessage = ({ data }) => {
+  function onChange({ data }) {
     const { path } = JSON.parse(data);
     if (path === SIDECAR) return load();
     if (/\.html?$/i.test(path) && path !== FILE) return;
@@ -519,7 +549,19 @@
       return toast('The file changed on disk. Reloading when you finish.');
     }
     location.reload();
-  };
+  }
+  // If the server restarts (an agent re-runs htmlpen), reload once it's back.
+  let lost = false;
+  (function connect() {
+    const events = new EventSource('/__htmlpen/events');
+    events.onmessage = onChange;
+    events.onopen = () => lost && location.reload();
+    events.onerror = () => {
+      lost = true;
+      // A proxy error page closes the stream for good; browsers only retry network errors.
+      if (events.readyState === EventSource.CLOSED) setTimeout(connect, 2000);
+    };
+  })();
 
   setMode(sessionStorage.getItem(MODE_KEY) ?? 'browse');
   load();

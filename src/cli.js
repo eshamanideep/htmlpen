@@ -1,30 +1,47 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
-import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { homedir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 import { applyEdit } from './edit.js';
 
 const HELP = `htmlpen: comment on and edit local HTML files in your browser, for your coding agent.
 
-Usage: htmlpen [file.html | folder] [--port 4747] [--no-open]
+Usage: htmlpen [file.html | folder] [--agent] [--port 4747] [--no-open]
+       htmlpen --install-skill    teach Claude Code to use htmlpen (~/.claude/skills/htmlpen)
 
   C  comment on any element (select text first to quote it)
   E  edit text in place; Enter writes it straight into the file
-  Comments are saved next to the file as <file>.comments.json for your agent to read.`;
+  Comments are saved next to the file as <file>.comments.json for your agent to read.
+
+  --agent  For coding agents: "Send to agent" delivers the review to you. In a Conductor
+           workspace it arrives as a chat message; elsewhere htmlpen prints it and exits,
+           so run it in the background.`;
 
 const { values: opts, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     port: { type: 'string', short: 'p', default: '4747' },
+    agent: { type: 'boolean' },
     'no-open': { type: 'boolean' },
+    'install-skill': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
   },
 });
 if (opts.help) {
   console.log(HELP);
+  process.exit(0);
+}
+if (opts['install-skill']) {
+  const dest = path.join(homedir(), '.claude', 'skills', 'htmlpen', 'SKILL.md');
+  await mkdir(path.dirname(dest), { recursive: true });
+  await copyFile(new URL('../skills/htmlpen/SKILL.md', import.meta.url), dest);
+  console.log(`Installed ${dest}\nClaude Code will now offer htmlpen reviews for HTML it writes.`);
   process.exit(0);
 }
 
@@ -35,6 +52,19 @@ if (!targetStat) {
   process.exit(1);
 }
 const root = targetStat.isDirectory() ? target : path.dirname(target);
+
+// In a Conductor cloud workspace the user's browser can't reach localhost, so htmlpen shares
+// itself at the workspace preview URL. Anyone with read access can open that URL, so writes
+// there need the edit key that only the printed link carries.
+const conductorCloud = process.env.CONDUCTOR_IS_LOCAL === '0' && !!process.env.CONDUCTOR_WORKSPACE_ID;
+const EDIT_KEY = conductorCloud
+  ? createHash('sha256')
+      .update(`htmlpen:${process.env.CONDUCTOR_API_TOKEN ?? randomUUID()}`)
+      .digest('hex')
+      .slice(0, 24)
+  : '1';
+const SEND = !opts.agent ? 'copy' : process.env.CONDUCTOR_SESSION_ID ? 'conductor' : 'exit';
+const AGENT = process.env.CLAUDECODE ? 'Claude' : 'your agent';
 const CLIENT = await readFile(new URL('./client.js', import.meta.url));
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -107,6 +137,23 @@ async function changed(abs) {
   for (const page of pages) page.write(`data: ${JSON.stringify({ path: toUrl(abs) })}\n\n`);
 }
 
+// Keep idle SSE streams open through proxies (Cloudflare drops them after ~100s of silence).
+setInterval(() => pages.forEach((page) => page.write(': ping\n\n')), 25_000).unref();
+
+function postToConductor(text) {
+  return new Promise((resolve, reject) => {
+    const args = ['message', 'create', '--session', process.env.CONDUCTOR_SESSION_ID, '--message-file', '-'];
+    const child = spawn('conductor', args, { stdio: ['pipe', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(stderr.trim() || `conductor exited with ${code}`)),
+    );
+    child.stdin.end(text);
+  });
+}
+
 async function writeOwn(abs, content) {
   selfWrites.set(abs, content);
   await (content === null ? rm(abs, { force: true }) : writeFile(abs, content));
@@ -129,7 +176,14 @@ async function readJson(req) {
 }
 
 function inject(html, abs) {
-  const tag = `<script src="/__htmlpen/client.js" data-file="${escAttr(toUrl(abs))}" data-display="${escAttr(display(abs))}"></script>`;
+  const attrs = {
+    file: toUrl(abs),
+    display: abs, // absolute, so an agent in any working directory finds the right file
+    send: SEND === 'copy' ? 'copy' : 'agent',
+    agent: AGENT,
+  };
+  const data = Object.entries(attrs).map(([k, v]) => ` data-${k}="${escAttr(v)}"`).join('');
+  const tag = `<script src="/__htmlpen/client.js"${data}></script>`;
   const i = html.toLowerCase().lastIndexOf('</body');
   return i === -1 ? html + tag : html.slice(0, i) + tag + html.slice(i);
 }
@@ -181,8 +235,25 @@ async function api(req, res, url) {
 
   const file = toAbs(url.searchParams.get('file') ?? '');
   if (!isHtml(file) || !(await stat(file).catch(() => null))) throw fail(404, 'Not an HTML file');
-  // Custom header forces a CORS preflight we never answer, so other sites can't write files.
-  if (req.method === 'POST' && req.headers['x-htmlpen'] !== '1') throw fail(403, 'Forbidden');
+  // The custom header forces a CORS preflight we never answer, so other sites can't write.
+  if (req.method === 'POST') {
+    const site = req.headers['sec-fetch-site'];
+    if (site && site !== 'same-origin') throw fail(403, 'Forbidden');
+    if (req.headers['x-htmlpen'] !== EDIT_KEY) throw fail(403, 'This link is view-only. Ask for the edit link.');
+  }
+
+  if (route === 'send' && req.method === 'POST') {
+    const { prompt } = await readJson(req);
+    if (typeof prompt !== 'string' || !prompt.trim()) throw fail(400, 'Nothing to send');
+    if (SEND === 'copy') throw fail(400, 'Start htmlpen with --agent to send to an agent');
+    if (SEND === 'conductor') {
+      await postToConductor(prompt);
+      return sendJson(res, 200, { ok: true });
+    }
+    // Print the review for the agent that started us in the background, then exit to wake it.
+    res.once('finish', () => process.stdout.write(`\n${prompt}\n`, () => process.exit(0)));
+    return sendJson(res, 200, { ok: true, exiting: true });
+  }
 
   if (route === 'comments') {
     const sidecar = `${file}.comments.json`;
@@ -222,8 +293,10 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const isApi = url.pathname.startsWith('/__htmlpen/');
   try {
-    // Only answer to localhost names, so a DNS-rebinding site can't reach the API.
-    if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(req.headers.host ?? '')) throw fail(403, 'Forbidden host');
+    // Only answer to localhost names, so a DNS-rebinding site can't reach the API. In Conductor
+    // cloud the only way in is Conductor's signed-in preview proxy, whose Host we don't control.
+    const localHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(req.headers.host ?? '');
+    if (!localHost && !conductorCloud) throw fail(403, 'Forbidden host');
     await (isApi ? api(req, res, url) : serveFile(res, url.pathname));
   } catch (err) {
     const status = err.status ?? (err instanceof URIError || err instanceof SyntaxError ? 400 : 500);
@@ -242,16 +315,29 @@ function listen(port, tries = 20) {
 }
 
 const port = await listen(Number(opts.port));
-const url = `http://localhost:${port}${targetStat.isDirectory() ? '/' : toUrl(target)}`;
+let base = `http://localhost:${port}`;
+if (conductorCloud) {
+  const { stdout } = await promisify(execFile)('conductor', ['--json', 'preview', 'set', '--port', String(port)]);
+  base = JSON.parse(stdout).preview.url.replace(/\/$/, '');
+}
+const startPath = targetStat.isDirectory() ? '/' : toUrl(target);
+const url = `${base}${startPath}${conductorCloud ? `?htmlpen=${EDIT_KEY}` : ''}`;
 console.log(`htmlpen  ${url}`);
 console.log(
   targetStat.isDirectory()
     ? `         serving ${display(root) || '.'}`
     : `         comments save to ${display(target)}.comments.json`,
 );
-console.log('         C = comment, E = edit, Ctrl+C to quit');
+if (conductorCloud) console.log('         shared at this workspace\'s Conductor preview URL; the link above can edit');
+console.log(
+  {
+    copy: '         C = comment, E = edit, Ctrl+C to quit',
+    conductor: '         waiting for review: "Send" posts it to this Conductor chat',
+    exit: '         waiting for review: "Send" prints it here and exits',
+  }[SEND],
+);
 
-if (!opts['no-open']) {
+if (!opts['no-open'] && !conductorCloud) {
   const [cmd, ...args] =
     process.platform === 'darwin'
       ? ['open', url]

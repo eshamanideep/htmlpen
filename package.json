@@ -25,7 +25,8 @@
     "htmlpen": "src/cli.js"
   },
   "files": [
-    "src"
+    "src",
+    "skills"
   ],
   "engines": {
     "node": ">=20"
