@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Launch plan</title>
+  <style>
+    body { font: 16px/1.6 ui-sans-serif, system-ui, sans-serif; color: #1c1917; background: #fafaf9; margin: 0; }
+    main { max-width: 760px; margin: 0 auto; padding: 56px 24px 120px; }
+    h1 { font-size: 40px; line-height: 1.1; margin: 0 0 8px; letter-spacing: -0.02em; }
+    .lede { color: #57534e; font-size: 18px; margin: 0 0 32px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 40px; }
+    .stat { background: #fff; border: 1px solid #e7e5e4; border-radius: 12px; padding: 16px; }
+    .stat b { display: block; font-size: 28px; }
+    .stat span { color: #78716c; font-size: 14px; }
+    h2 { font-size: 22px; margin: 32px 0 8px; }
+    li { margin: 4px 0; }
+    .cta { display: inline-block; margin-top: 24px; padding: 10px 18px; border-radius: 999px; background: #1c1917; color: #fff; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Launch plan: Pocket Mode</h1>
+    <p class="lede">A two-week rollout for the new offline reading feature, starting with <strong>beta users</strong> in Canada.</p>
+
+    <div class="stats">
+      <div class="stat"><b>12k</b><span>beta users</span></div>
+      <div class="stat"><b>3</b><span>launch markets</span></div>
+      <div class="stat"><b>Oct 14</b><span>general availability</span></div>
+    </div>
+
+    <h2>Milestones</h2>
+    <ul>
+      <li>Week 1: ship to beta, watch crash rate and sync errors</li>
+      <li>Week 2: expand to the US and UK, publish the blog post</li>
+      <li>GA: enable for everyone and retire the old offline cache</li>
+    </ul>
+
+    <h2>Risks</h2>
+    <p>Large libraries may take a while to download on first launch. We will cap the initial sync at 200 articles and backfill in the background.</p>
+
+    <h2>Live signups</h2>
+    <p id="signups">Loading…</p>
+
+    <a class="cta" href="https://example.com">Read the full spec</a>
+  </main>
+  <script>
+    // Rendered at runtime, so htmlpen can't edit it in place (it'll turn edits into comments).
+    document.getElementById('signups').textContent = '1,284 people joined the waitlist today.';
+  </script>
+</body>
+</html>

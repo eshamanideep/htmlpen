@@ -1,0 +1,33 @@
+{
+  "name": "htmlpen",
+  "version": "0.1.0",
+  "description": "Comment on and edit local HTML files in your browser, so your coding agent knows what to change.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "html",
+    "review",
+    "comments",
+    "annotate",
+    "editor",
+    "ai",
+    "agent",
+    "claude",
+    "codex"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "parse5": "^8.0.1"
+  },
+  "bin": {
+    "htmlpen": "src/cli.js"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
