@@ -486,7 +486,8 @@
         const same = [...document.body.querySelectorAll(CSS.escape(el.localName))].filter(
           (x) => x === el || x.innerHTML === before,
         );
-        await api('edit', { tag: el.localName, index: same.indexOf(el), count: same.length, before, after });
+        const saved = await api('edit', { tag: el.localName, index: same.indexOf(el), count: same.length, before, after });
+        version = saved.version; // our own change; don't reload for it on reconnect
         sessionStorage.setItem(EDITS_KEY, '1');
         toast(`Saved to ${DISPLAY}`);
       } catch (err) {
@@ -571,27 +572,42 @@
   function onChange({ data }) {
     const { path } = JSON.parse(data);
     if (path === SIDECAR) return load();
-    if (/\.html?$/i.test(path) && path !== FILE) return;
+    if (/\.html?$/i.test(path) && path !== FILE) {
+      // Framed pages have no toolbar of their own, so refresh them from here.
+      for (const f of document.querySelectorAll('iframe')) {
+        if (new URL(f.src, location).pathname === path) f.contentWindow?.location.reload();
+      }
+      return;
+    }
     if (busy()) toast('The file changed on disk. Reloading when you finish.');
     reloadSoon();
   }
-  // If the server restarts (an agent re-runs htmlpen), save what couldn't be saved, then reload.
-  let lost = false;
-  async function reconnected() {
-    lost = false;
+  // On every reconnect (htmlpen restarted, or this tab came back into view), save what couldn't
+  // be saved, then reload if the file changed meanwhile.
+  let version = null;
+  async function hello({ data }) {
+    const first = version === null;
+    const changed = !first && JSON.parse(data).version !== version;
+    version = JSON.parse(data).version;
     for (const op of unsaved.splice(0)) await change(op);
-    reloadSoon();
+    if (!first) changed ? reloadSoon() : load();
   }
-  (function connect() {
-    const events = new EventSource('/__htmlpen/events');
-    events.onmessage = onChange;
-    events.onopen = () => lost && reconnected();
-    events.onerror = () => {
-      lost = true;
+  function connect() {
+    const source = new EventSource(`/__htmlpen/events?file=${encodeURIComponent(FILE)}`);
+    source.addEventListener('hello', hello);
+    source.onmessage = onChange;
+    source.onerror = () => {
       // A proxy error page closes the stream for good; browsers only retry network errors.
-      if (events.readyState === EventSource.CLOSED) setTimeout(connect, 2000);
+      if (source.readyState === EventSource.CLOSED && !document.hidden) setTimeout(() => (events = connect()), 2000);
     };
-  })();
+    return source;
+  }
+  let events = connect();
+  // Browsers allow ~6 connections per host, so hidden tabs let go of theirs.
+  document.addEventListener('visibilitychange', () => {
+    events.close();
+    if (!document.hidden) events = connect();
+  });
 
   setMode(sessionStorage.getItem(MODE_KEY) ?? 'browse');
   load();

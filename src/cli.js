@@ -110,7 +110,8 @@ function toAbs(urlPath) {
   const rel = path.relative(root, abs);
   if (outside(rel)) throw fail(403, 'Outside the served folder');
   // Never serve dotfiles (.env, .git): on a shared preview link, every viewer could read them.
-  if (rel.split(path.sep).some((part) => part.startsWith('.'))) throw fail(404, 'Not found');
+  const dotfile = rel.split(path.sep).some((part) => part.startsWith('.'));
+  if (dotfile && abs !== target) throw fail(404, 'Not found'); // unless it's the file you opened
   return abs;
 }
 // Symlinks can point anywhere, so also check where an existing file really lives.
@@ -191,6 +192,8 @@ async function writeOwn(abs, content) {
   await writeFile(abs, content);
 }
 
+const fileVersion = async (abs) => (await stat(abs).catch(() => null))?.mtimeMs ?? 0;
+
 async function readComments(sidecar) {
   const saved = await readFile(sidecar, 'utf8').catch(() => '[]');
   let list;
@@ -266,16 +269,21 @@ async function serveFile(res, urlPath) {
   if (!isHtml(abs)) return send(res, 200, body, type);
   const text = asUtf8(body);
   if (text !== null) return send(res, 200, inject(text, abs), type);
-  // Not UTF-8: latin1 maps bytes 1:1, so the page keeps its bytes and its own <meta charset>.
-  send(res, 200, Buffer.from(inject(body.toString('latin1'), abs), 'latin1'), 'text/html');
+  // Not UTF-8: latin1 maps bytes 1:1, so the page keeps its bytes. Let its own <meta charset>
+  // decide; without one, UTF-8 with a few stray bytes still beats the browser's cp1252 guess.
+  const head = body.subarray(0, 1024).toString('latin1');
+  const declared = /<meta[^>]+charset/i.test(head);
+  send(res, 200, Buffer.from(inject(body.toString('latin1'), abs), 'latin1'), declared ? 'text/html' : type);
 }
 
 async function api(req, res, url) {
   const route = url.pathname.slice('/__htmlpen/'.length);
   if (route === 'client.js') return send(res, 200, CLIENT, TYPES['.js']);
   if (route === 'events') {
+    // The page compares this version on every (re)connect to tell if it missed a change.
+    const version = await fileVersion(toAbs(url.searchParams.get('file') ?? '/'));
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
-    res.write(': connected\n\n');
+    res.write(`event: hello\ndata: ${JSON.stringify({ version })}\n\n`);
     pages.add(res);
     req.on('close', () => pages.delete(res));
     return;
@@ -344,7 +352,7 @@ async function api(req, res, url) {
       }
       await writeOwn(file, next);
     });
-    return sendJson(res, 200, { ok: true });
+    return sendJson(res, 200, { ok: true, version: await fileVersion(file) });
   }
   throw fail(404, 'Unknown route');
 }

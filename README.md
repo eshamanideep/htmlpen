@@ -69,8 +69,12 @@ In-place edits write to your actual file, so htmlpen is careful about *where*:
 
 - It only rewrites the inner HTML of the one element you edited. The rest of the file stays byte-for-byte identical, formatting and all.
 - It checks that the element's current content is literally in the file before writing. Text rendered by JavaScript (charts, `fetch`ed data, templating) isn't, so htmlpen won't write it. Your edit becomes a comment for the agent instead, so nothing you type is lost.
-- If several identical elements match, it refuses rather than guesses (also becoming a comment).
-- The server binds to `127.0.0.1`, rejects non-localhost `Host` headers, and requires a header that browsers won't send cross-site, so other websites can't write to your files. When shared through Conductor, writes also need the link's edit key.
+- If identical elements exist (three "Learn more" buttons), it writes to the one you edited, and refuses if scripts added or changed look-alikes.
+- After every edit it re-parses the file and refuses if anything but that element would change, so unusual markup can't make an edit spill over.
+- Only UTF-8 files are edited in place; other encodings are served untouched and edits become comments. Simultaneous saves (two tabs, you and the agent) are applied one at a time and merged, never torn.
+- The server binds to `127.0.0.1`, rejects non-localhost `Host` headers, and requires a header that browsers won't send cross-site, so other websites can't write to your files. It never serves dotfiles (`.env`, `.git`) or follows symlinks out of the folder. When shared through Conductor, writes also need the link's edit key.
+
+Every release is checked by `npm run test:browser`, which edits all 102 text elements of 13 tricky pages in real Chrome and fails on any corruption.
 
 Your files are yours: use git (or your agent's undo) to roll back an edit.
 

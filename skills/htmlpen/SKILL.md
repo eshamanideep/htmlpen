@@ -1,6 +1,6 @@
 ---
 name: htmlpen
-description: Let the user review an HTML file in their browser (pin comments on elements, edit text in place) and get the feedback back in this session. Use after creating or substantially changing an HTML page the user should look at (reports, plans, prototypes, slides, dashboards, an artifact before publishing), or when the user asks to review, mark up, annotate, comment on, or edit an HTML page.
+description: Hand HTML pages to the user through htmlpen. Whenever you create or substantially change an HTML file for the user (a report, one-pager, plan, comparison, briefing, prototype, slide deck, dashboard, or an artifact before publishing), finish by opening it in htmlpen so they can pin comments and edit text in place, with their review coming straight back to this session. Also use it when the user asks to review, mark up, annotate, comment on, or edit an HTML page. Skip it for app source served by a dev server, build output, and test fixtures.
 ---
 
 # Review HTML with htmlpen
