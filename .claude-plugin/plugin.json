@@ -1,0 +1,11 @@
+{
+  "name": "htmlpen",
+  "displayName": "htmlpen",
+  "version": "0.1.0",
+  "description": "Review HTML pages Claude writes: pin comments and edit text in your browser, then send the review straight back to Claude. Works with Claude Code artifacts and Conductor.",
+  "author": { "name": "Esha Manideep", "url": "https://github.com/eshamanideep" },
+  "homepage": "https://github.com/eshamanideep/htmlpen#readme",
+  "repository": "https://github.com/eshamanideep/htmlpen",
+  "license": "MIT",
+  "keywords": ["html", "review", "comments", "artifacts", "annotate", "editor"]
+}

@@ -2,9 +2,8 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
-import { copyFile, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
@@ -13,7 +12,6 @@ import { applyEdit } from './edit.js';
 const HELP = `htmlpen: comment on and edit local HTML files in your browser, for your coding agent.
 
 Usage: htmlpen [file.html | folder] [--agent] [--port 4747] [--no-open]
-       htmlpen --install-skill    teach Claude Code to use htmlpen (~/.claude/skills/htmlpen)
 
   C  comment on any element (select text first to quote it)
   E  edit text in place; Enter writes it straight into the file
@@ -29,19 +27,11 @@ const { values: opts, positionals } = parseArgs({
     port: { type: 'string', short: 'p', default: '4747' },
     agent: { type: 'boolean' },
     'no-open': { type: 'boolean' },
-    'install-skill': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
   },
 });
 if (opts.help) {
   console.log(HELP);
-  process.exit(0);
-}
-if (opts['install-skill']) {
-  const dest = path.join(homedir(), '.claude', 'skills', 'htmlpen', 'SKILL.md');
-  await mkdir(path.dirname(dest), { recursive: true });
-  await copyFile(new URL('../skills/htmlpen/SKILL.md', import.meta.url), dest);
-  console.log(`Installed ${dest}\nClaude Code will now offer htmlpen reviews for HTML it writes.`);
   process.exit(0);
 }
 

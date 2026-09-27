@@ -1,0 +1,15 @@
+{
+  "name": "htmlpen",
+  "description": "htmlpen: review HTML pages in your browser and send the review to Claude.",
+  "owner": {
+    "name": "Esha Manideep",
+    "url": "https://github.com/eshamanideep"
+  },
+  "plugins": [
+    {
+      "name": "htmlpen",
+      "source": "./",
+      "description": "Review HTML pages Claude writes: pin comments and edit text in your browser, then send the review straight back to Claude."
+    }
+  ]
+}
