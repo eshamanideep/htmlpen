@@ -1,6 +1,6 @@
 ---
-name: review
-description: Hand HTML pages to the user through htmlpen so they can pin comments and edit text in their browser, with the review coming straight back to this session. Use whenever you create or substantially change an HTML file for the user (a report, one-pager, plan, comparison, briefing, prototype, slide deck, dashboard), when the user wants to review, mark up, comment on, or edit an HTML page or a Claude Code artifact, and before publishing an artifact they want to check first. Needs a shell on the user's machine (Claude Code). Skip it for app source served by a dev server, build output, and test fixtures.
+name: review-html
+description: After you create or substantially change an HTML file for the user (a report, one-pager, plan, comparison, briefing, prototype, slide deck, dashboard), always finish by opening it with htmlpen, even if you already checked it yourself with a screenshot. The user reviews it in their browser, pins comments, edits text in place, and the review comes straight back to this session. Also use it when the user wants to review, mark up, comment on, or edit an HTML page or a Claude Code artifact. Needs a shell on the user's machine (Claude Code). Skip it for app source served by a dev server, build output, and test fixtures.
 ---
 
 # Review HTML with htmlpen
