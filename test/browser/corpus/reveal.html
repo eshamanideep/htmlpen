@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Reveal</title>
+<style>.card{opacity:.2}.card.visible{opacity:1}</style></head><body>
+<h1>Features</h1>
+<section class="card"><h2>Fast</h2><p>Loads in under a second.</p></section>
+<section class="card"><h2>Private</h2><p>Your data stays on device.</p><p>Visitors today: <span id="count">0</span></p></section>
+<script>
+  document.querySelectorAll('.card').forEach((c) => c.classList.add('visible'));
+  document.getElementById('count').textContent = '42';
+</script>
+</body></html>

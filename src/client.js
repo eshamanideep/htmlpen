@@ -172,7 +172,9 @@
   const isTyping = (el) => el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName);
 
   // Edit the nearest block-level element with text, so clicking a <b> edits its whole paragraph.
+  // SVG can't be contenteditable, so text inside it is comment-only.
   function editTarget(el) {
+    if (el?.closest('svg')) return null;
     for (; el && el !== document.body; el = el.parentElement) {
       if (getComputedStyle(el).display !== 'inline' && el.textContent.trim()) return el;
     }
@@ -433,7 +435,7 @@
   }
 
   function startEdit(el, e) {
-    if (!el) return;
+    if (!el) return toast('Nothing editable here. Press C to comment on it instead.');
     editing = { el, before: el.innerHTML };
     el.contentEditable = 'true';
     el.focus();

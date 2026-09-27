@@ -84,7 +84,8 @@ Your files are yours: use git (or your agent's undo) to roll back an edit.
 
 ```sh
 npm install
-npm test
+npm test                # unit tests for mapping edits back to the source
+npm run test:browser    # edits every text element of 13 tricky pages in Chrome; 0 corruptions allowed
 node src/cli.js examples/launch-plan.html
 ```
 

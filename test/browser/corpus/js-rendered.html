@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><title>App</title></head><body>
+<div id="root"></div>
+<script>
+  const items = ['Alpha', 'Beta', 'Gamma'];
+  document.getElementById('root').innerHTML =
+    '<h1>Rendered app</h1><ul>' + items.map((i) => `<li>${i} item</li>`).join('') + '</ul><p>All of this came from JS.</p>';
+</script>
+</body></html>

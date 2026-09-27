@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Deck</title>
+<style>section{min-height:60vh;padding:40px;border-bottom:1px solid #ddd}</style></head><body>
+<section><h1>Q3 review</h1><p>Where we are and what is next.</p></section>
+<section><h2>Wins</h2><ul><li>Shipped offline mode</li><li>Cut p95 latency by 30%</li></ul></section>
+<section><h2>Next</h2><ol><li>Pricing page</li><li>SSO</li></ol><p><small>Draft &middot; do not share</small></p></section>
+<script>
+  let i = 0; const s = document.querySelectorAll('section');
+  addEventListener('keydown', (e) => { if (e.key === 'ArrowRight' || e.key === ' ') s[++i % s.length].scrollIntoView(); });
+</script>
+</body></html>

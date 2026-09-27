@@ -2,18 +2,19 @@ import { parse, parseFragment, serialize } from 'parse5';
 
 const elements = (node) => (node.childNodes ?? []).filter((n) => !n.nodeName.startsWith('#'));
 
-// Where a node's source text ends. Implied end tags (`<li>a<li>b`) have no endTag, and
-// parse5's endOffset for them can swallow the parent's closing tag, so walk to the last child.
-// Text after </body> or </html> is merged into the last text node; stop before those tags.
+// Where a node's source text ends, as { end, tailEnd }. Implied end tags (`<li>a<li>b`) have no
+// endTag, and parse5's endOffset for them can swallow the parent's closing tag, so walk to the
+// last child. Text after </body> or </html> (the "tail") is merged into the last text node:
+// `end` stops before those tags and `tailEnd` is where the merged text really ends.
 function sourceEnd(source, node) {
   const loc = node.sourceCodeLocation;
-  if (loc.endTag) return loc.endTag.endOffset;
+  if (loc.endTag) return { end: loc.endTag.endOffset };
   if (node.nodeName === '#text') {
     const cut = source.slice(loc.startOffset, loc.endOffset).search(/<\/(body|html)[\s>]/i);
-    return cut === -1 ? loc.endOffset : loc.startOffset + cut;
+    return cut === -1 ? { end: loc.endOffset } : { end: loc.startOffset + cut, tailEnd: loc.endOffset };
   }
   const last = node.childNodes?.at(-1);
-  if (!last) return loc.startTag?.endOffset ?? loc.endOffset;
+  if (!last) return { end: loc.startTag?.endOffset ?? loc.endOffset };
   if (!last.sourceCodeLocation) throw new Error("Can't locate this element's end in the file.");
   return sourceEnd(source, last);
 }
@@ -57,6 +58,12 @@ export function applyEdit(source, { tag, path, before, after }) {
   const loc = hit.node.sourceCodeLocation;
   const last = hit.node.childNodes.at(-1);
   const start = loc.startTag.endOffset;
-  const end = loc.endTag ? loc.endTag.startOffset : last ? sourceEnd(source, last) : start;
-  return source.slice(0, start) + after + source.slice(end);
+  const { end, tailEnd = end } = loc.endTag
+    ? { end: loc.endTag.startOffset }
+    : last
+      ? sourceEnd(source, last)
+      : { end: start };
+  // `after` already contains the merged tail text, so keep only the closing tags from it.
+  const closing = source.slice(end, tailEnd).match(/<\/(body|html)[^>]*>/gi)?.join('') ?? '';
+  return source.slice(0, start) + after + closing + source.slice(tailEnd);
 }

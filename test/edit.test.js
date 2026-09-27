@@ -25,9 +25,10 @@ test('handles implied end tags without eating the parent close tag', () => {
   const src = '<body><ul><li>One<li>Two</ul><p>Last\n</body></html>\n';
   const li = applyEdit(src, { tag: 'li', path: [0, 1], before: 'Two', after: 'Deux' });
   assert.equal(li, '<body><ul><li>One<li>Deux</ul><p>Last\n</body></html>\n');
-  // The browser merges the newline after </html> into the last paragraph's text.
-  const p = applyEdit(src, { tag: 'p', path: [1], before: 'Last\n\n', after: 'Fin\n' });
-  assert.equal(p, '<body><ul><li>One<li>Two</ul><p>Fin\n</body></html>\n');
+  // The browser merges the newline after </html> into the last paragraph's text, so the edit
+  // (which already contains it) replaces it rather than growing a newline on every save.
+  const p = applyEdit(src, { tag: 'p', path: [1], before: 'Last\n\n', after: 'Last\n\n ZZ' });
+  assert.equal(p, '<body><ul><li>One<li>Two</ul><p>Last\n\n ZZ</body></html>');
 });
 
 test('uses the path to pick between identical elements', () => {
