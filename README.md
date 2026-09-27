@@ -12,11 +12,15 @@ Press **C** to pin a comment on anything (select text to quote it), **E** to edi
 
 ## With Claude Code
 
-```sh
-npx htmlpen --install-skill
+```
+/plugin install htmlpen --marketplace eshamanideep/htmlpen
 ```
 
-Now when Claude writes an HTML page, it opens it in htmlpen and gives you the link. Review it, press **Send to Claude**, and the review lands back in the session. It works locally and in [Conductor](https://conductor.build) cloud workspaces (shared at the workspace preview URL; only the printed link can edit). For [artifacts](https://code.claude.com/docs/en/artifacts): review the file with htmlpen first, then publish it.
+When Claude writes an HTML page, it hands it to you in htmlpen (the `/htmlpen:review-html` skill, plus a hook that reminds Claude to use it). Review it, press **Send to Claude**, and the review lands back in the session. It works locally and in [Conductor](https://conductor.build) cloud workspaces, where the page is shared at the workspace preview URL and only the printed link can edit.
+
+[Artifacts](https://code.claude.com/docs/en/artifacts): htmlpen can't run inside a published artifact, but it reviews the artifact's local file, and Claude republishes to the same link.
+
+What it runs: a local server on `127.0.0.1` for the page you're reviewing. In Conductor it also calls the `conductor` CLI to share the preview link and post your review to the chat. Nothing else leaves your machine.
 
 Other agents: tell them to apply the unresolved entries in `<file>.comments.json` and set `"resolved": true`.
 
