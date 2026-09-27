@@ -4,7 +4,7 @@
   "description": "Comment on and edit local HTML files in your browser, so your coding agent knows what to change.",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:browser": "node test/browser/roundtrip.mjs"
+    "test:browser": "npm ci --prefix test/browser --silent && node test/browser/roundtrip.mjs"
   },
   "keywords": [
     "html",
@@ -30,9 +30,6 @@
   ],
   "engines": {
     "node": ">=20"
-  },
-  "devDependencies": {
-    "playwright-core": "1.63.0"
   },
   "repository": {
     "type": "git",
