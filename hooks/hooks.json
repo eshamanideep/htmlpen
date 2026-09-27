@@ -1,0 +1,18 @@
+{
+  "description": "Remind Claude to hand new HTML pages to the user with htmlpen",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/html-written.mjs"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
