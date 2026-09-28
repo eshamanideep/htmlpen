@@ -20,7 +20,7 @@ When Claude writes an HTML page, it hands it to you in htmlpen (the `/htmlpen:re
 
 [Artifacts](https://code.claude.com/docs/en/artifacts): htmlpen can't run inside a published artifact, but it reviews the artifact's local file, and Claude republishes to the same link.
 
-What it runs: a local server on `127.0.0.1` for the page you're reviewing. Two hooks watch Claude's Write and Bash calls for new `.html` files (keeping a short list in your temp folder): Claude gets a reminder to hand each page over, and one prompt if it tries to finish without doing so. In Conductor it also calls the `conductor` CLI to share the preview link and post your review to the chat. Nothing else leaves your machine.
+What it runs: a local server on `127.0.0.1` for the page you're reviewing. Two hooks watch Claude's Write and Bash calls for new `.html` files (keeping a short list in your temp folder): Claude gets a reminder to hand each page over, and one prompt if it tries to finish without doing so. In Conductor it also calls the `conductor` CLI to share the preview link and post your review to the chat. Nothing else leaves your machine; details in [PRIVACY.md](PRIVACY.md).
 
 Other agents: tell them to apply the unresolved entries in `<file>.comments.json` and set `"resolved": true`.
 
