@@ -6,6 +6,9 @@
   "author": { "name": "Esha Manideep", "url": "https://github.com/eshamanideep" },
   "homepage": "https://github.com/eshamanideep/htmlpen#readme",
   "repository": "https://github.com/eshamanideep/htmlpen",
+  "documentationUrl": "https://github.com/eshamanideep/htmlpen#readme",
+  "privacyPolicyUrl": "https://github.com/eshamanideep/htmlpen/blob/main/PRIVACY.md",
+  "supportUrl": "https://github.com/eshamanideep/htmlpen/issues",
   "license": "MIT",
   "keywords": ["html", "review", "comments", "artifacts", "annotate", "editor"]
 }
